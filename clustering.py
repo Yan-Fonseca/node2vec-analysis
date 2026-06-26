@@ -1,7 +1,18 @@
+import argparse
 import os
 import numpy as np
 from sklearn.cluster import KMeans
 from sklearn.preprocessing import StandardScaler
+
+
+def parse_args():
+    """
+    Parses the clustering arguments.
+    """
+    parser = argparse.ArgumentParser(description="Run clustering on node embeddings.")
+    parser.add_argument('--clusters', type=int, default=0,
+                        help='Number of clusters for KMeans. If <= 0, infer using the existing heuristic.')
+    return parser.parse_args()
 
 
 def load_embeddings(filepath):
@@ -37,7 +48,7 @@ def perform_clustering(embedding_matrix, n_clusters=None):
     """
     Realiza clusterização K-means nos embeddings.
     """
-    if n_clusters is None:
+    if n_clusters is None or n_clusters <= 0:
         # Usar sqrt(n) como heurística para número de clusters
         n_clusters = max(2, int(np.sqrt(len(embedding_matrix))) - 1)
     
@@ -62,6 +73,8 @@ def save_clustering_results(node_names, labels, output_filepath):
 
 
 def main():
+    args = parse_args()
+
     # Caminho do arquivo de embeddings na pasta emb
     emb_dir = os.path.join(os.path.dirname(__file__), 'emb')
     
@@ -86,7 +99,7 @@ def main():
             embeddings, embedding_matrix, node_names = load_embeddings(emb_path)
             
             # Realizar clusterização
-            labels, kmeans = perform_clustering(embedding_matrix)
+            labels, kmeans = perform_clustering(embedding_matrix, n_clusters=args.clusters)
             
             # Salvar resultados
             output_filename = f"{os.path.splitext(emb_file)[0]}_clusters.txt"

@@ -54,10 +54,115 @@ def load_clustering(filepath):
 
 def load_graph(filepath):
     """
-    Carrega grafo de um arquivo edgelist.
+    Carrega grafo a partir de um arquivo de arestas.
+    Suporta edgelist, .mtx, .cites e arquivos de pares simples.
     """
-    G = nx.read_edgelist(filepath, nodetype=int)
-    return G
+    ext = os.path.splitext(filepath)[1].lower()
+
+    if ext == '.mtx':
+        from scipy.io import mmread
+
+        try:
+            matrix = mmread(filepath)
+            if hasattr(matrix, 'tocoo'):
+                matrix = matrix.tocoo()
+
+            G = nx.Graph()
+            for i, j in zip(matrix.row, matrix.col):
+                if i == j:
+                    continue
+                G.add_edge(int(i), int(j))
+            return G
+        except Exception:
+            G = nx.Graph()
+            edge_pairs = []
+
+            with open(filepath, 'r', encoding='utf-8') as f:
+                for line in f:
+                    stripped = line.strip()
+                    if not stripped or stripped.startswith('%') or stripped.startswith('#'):
+                        continue
+
+                    parts = stripped.split()
+                    if len(parts) < 2:
+                        continue
+
+                    try:
+                        u = int(parts[0])
+                        v = int(parts[1])
+                    except ValueError:
+                        continue
+
+                    edge_pairs.append((u, v))
+
+            if not edge_pairs:
+                raise ValueError(f'Nenhum par de arestas encontrado em {filepath}')
+
+            if len(edge_pairs) > 1:
+                first_u, first_v = edge_pairs[0]
+                other_nodes = [max(u, v) for u, v in edge_pairs[1:]]
+                if other_nodes and first_u >= max(other_nodes) and first_v >= max(other_nodes):
+                    edge_pairs = edge_pairs[1:]
+
+            for u, v in edge_pairs:
+                if u == v:
+                    continue
+                G.add_edge(u, v)
+
+            if G.number_of_nodes() == 0:
+                raise ValueError(f'Nenhum nó encontrado em {filepath}')
+            return G
+
+    if ext in {'.cites', '.txt', '.csv', '.edges', '.edge', '.dat'}:
+        G = nx.Graph()
+        with open(filepath, 'r', encoding='utf-8') as f:
+            for line in f:
+                stripped = line.strip()
+                if not stripped or stripped.startswith('#'):
+                    continue
+
+                parts = stripped.split()
+                if len(parts) < 2:
+                    continue
+
+                try:
+                    u = int(parts[0])
+                    v = int(parts[1])
+                except ValueError:
+                    continue
+
+                G.add_edge(u, v)
+
+        if G.number_of_nodes() == 0:
+            raise ValueError(f'Nenhum nó encontrado em {filepath}')
+        return G
+
+    return nx.read_edgelist(filepath, nodetype=int)
+
+
+def find_graph_file(base_name, base_dir):
+    """
+    Procura um arquivo de arestas no diretório de datasets.
+    """
+    dataset_dir = os.path.join(base_dir, 'datasets')
+    graph_dir = os.path.join(base_dir, 'graph')
+
+    if os.path.exists(dataset_dir):
+        for root, _, files in os.walk(dataset_dir):
+            for filename in files:
+                name, ext = os.path.splitext(filename)
+                if name != base_name and not filename.startswith(base_name):
+                    continue
+
+                if ext.lower() in {'.mtx', '.cites', '.txt', '.csv', '.edges', '.edge', '.edgelist', '.dat'}:
+                    return os.path.join(root, filename)
+
+    if os.path.exists(graph_dir):
+        for filename in os.listdir(graph_dir):
+            if filename.startswith(base_name) and filename.endswith(('.edgelist', '.txt', '.csv', '.edges', '.edge', '.dat')):
+                return os.path.join(graph_dir, filename)
+
+    return None
 
 
 def get_cluster_colors(clusters):
@@ -114,9 +219,26 @@ def plot_graph(G, clusters, output_filepath):
     
     # Obter mapa de cores
     color_map = get_cluster_colors(clusters)
-    
-    # Usar layout spring para posicionamento
-    pos = nx.spring_layout(G, k=0.5, iterations=50, seed=42)
+
+    # Criar um grafo auxiliar com pesos para aproximar nós do mesmo cluster
+    cluster_graph = nx.Graph()
+    cluster_graph.add_nodes_from(G.nodes())
+
+    for u, v, data in G.edges(data=True):
+        cluster_graph.add_edge(u, v, weight=data.get('weight', 1))
+
+    node_to_cluster = {node: clusters[str(node)] for node in G.nodes()}
+    for u, v in G.edges():
+        if node_to_cluster[u] == node_to_cluster[v]:
+            cluster_graph[u][v]['weight'] += 2.0
+
+    pos = nx.spring_layout(
+        cluster_graph,
+        k=0.6,
+        iterations=120,
+        seed=42,
+        weight='weight'
+    )
     
     # Criar lista de cores para cada nó
     node_colors = [color_map[clusters[str(node)]] for node in G.nodes()]
@@ -172,12 +294,11 @@ def main():
             print(f"  Execute clustering.py primeiro!")
             continue
         
-        # Procurar arquivo edgelist correspondente
-        edgelist_file = f"{base_name}.edgelist"
-        edgelist_path = os.path.join(graph_dir, edgelist_file)
+        # Procurar arquivo de arestas correspondente no diretório de datasets
+        edgelist_path = find_graph_file(base_name, base_dir)
         
-        if not os.path.exists(edgelist_path):
-            print(f"⚠ Arquivo edgelist não encontrado: {edgelist_file}")
+        if not edgelist_path:
+            print(f"⚠ Arquivo de arestas não encontrado para '{base_name}' em datasets/ ou graph/")
             continue
         
         print(f"\nProcessando {emb_file}...")
